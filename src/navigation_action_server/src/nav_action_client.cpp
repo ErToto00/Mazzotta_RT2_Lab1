@@ -1,56 +1,92 @@
 #include <memory>
+#include <thread>
+#include <iostream>
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
-#include "turtlesim/action/navigate_to_pose.hpp"
+#include "rclcpp_components/register_node_macro.hpp"
+#include "navigation_interfaces/action/navigate.hpp"
 
 using namespace std::placeholders;
+
+namespace nav_action_client_lib
+{
 
 class NavActionClient : public rclcpp::Node
 {
 public:
-  using NavigateToPose = turtlesim::action::NavigateToPose;
-  using GoalHandleNavigateToPose = rclcpp_action::ClientGoalHandle<NavigateToPose>;
+  using Navigate = navigation_interfaces::action::Navigate;
+  using GoalHandleNavigate = rclcpp_action::ClientGoalHandle<Navigate>;
 
   explicit NavActionClient(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
     : Node("nav_action_client", options)
   {
-    this->client_ptr_ = rclcpp_action::create_client<NavigateToPose>(
+    this->client_ptr_ = rclcpp_action::create_client<Navigate>(
       this,
-      "navigate_to_pose");
+      "navigate");
 
-    this->timer_ = this->create_wall_timer(
-      std::chrono::milliseconds(500),
-      std::bind(&NavActionClient::send_goal, this));
+    // Start CLI thread
+    cli_thread_ = std::thread(&NavActionClient::cli_loop, this);
+  }
+
+  ~NavActionClient()
+  {
+    if (cli_thread_.joinable()) {
+      // Forcing standard input close isn't trivial here, but we can detach
+      cli_thread_.detach();
+    }
   }
 
 private:
-  rclcpp_action::Client<NavigateToPose>::SharedPtr client_ptr_;
-  rclcpp::TimerBase::SharedPtr timer_;
-  bool goal_sent_{false};
+  rclcpp_action::Client<Navigate>::SharedPtr client_ptr_;
+  std::thread cli_thread_;
+  std::shared_ptr<GoalHandleNavigate> current_goal_handle_;
 
-  void send_goal()
+  void cli_loop()
   {
-    using namespace std::placeholders;
+    while (rclcpp::ok()) {
+      std::cout << "\n--- Navigation CLI ---\n";
+      std::cout << "Enter 'x y theta' to send a new target, or 'cancel' to cancel current goal: ";
+      
+      std::string input;
+      if (!std::getline(std::cin, input)) {
+        continue;
+      }
 
-    if (!this->client_ptr_) {
-      RCLCPP_ERROR(this->get_logger(), "Action client not ready");
+      if (input == "cancel") {
+        if (current_goal_handle_) {
+          RCLCPP_INFO(this->get_logger(), "Sending cancel request...");
+          client_ptr_->async_cancel_goal(current_goal_handle_);
+          current_goal_handle_ = nullptr;
+        } else {
+          RCLCPP_WARN(this->get_logger(), "No active goal to cancel.");
+        }
+        continue;
+      }
+
+      double x, y, theta;
+      if (sscanf(input.c_str(), "%lf %lf %lf", &x, &y, &theta) == 3) {
+        send_goal(x, y, theta);
+      } else {
+        std::cout << "Invalid input. Please provide three numbers separated by spaces (e.g., '5.0 5.0 0.0').\n";
+      }
+    }
+  }
+
+  void send_goal(double x, double y, double theta)
+  {
+    if (!this->client_ptr_->wait_for_action_server(std::chrono::seconds(5))) {
+      RCLCPP_ERROR(this->get_logger(), "Action server not available after waiting");
       return;
     }
 
-    if (goal_sent_) {
-      return;
-    }
+    auto goal_msg = Navigate::Goal();
+    goal_msg.x = x;
+    goal_msg.y = y;
+    goal_msg.theta = theta;
 
-    auto goal_msg = NavigateToPose::Goal();
-    goal_msg.pose.header.frame_id = "turtle1";
-    goal_msg.pose.pose.position.x = 5.0;
-    goal_msg.pose.pose.position.y = 5.0;
-    goal_msg.pose.pose.orientation.z = sin(M_PI / 4.0);
-    goal_msg.pose.pose.orientation.w = cos(M_PI / 4.0);
+    RCLCPP_INFO(this->get_logger(), "Sending goal: x=%f, y=%f, theta=%f", x, y, theta);
 
-    RCLCPP_INFO(this->get_logger(), "Sending goal");
-
-    auto send_goal_options = rclcpp_action::Client<NavigateToPose>::SendGoalOptions();
+    auto send_goal_options = rclcpp_action::Client<Navigate>::SendGoalOptions();
     send_goal_options.goal_response_callback =
       std::bind(&NavActionClient::goal_response_callback, this, _1);
     send_goal_options.feedback_callback =
@@ -61,28 +97,30 @@ private:
     auto future_goal_handle = this->client_ptr_->async_send_goal(goal_msg, send_goal_options);
   }
 
-  void goal_response_callback(std::shared_future<GoalHandleNavigateToPose::SharedPtr> future)
+  void goal_response_callback(GoalHandleNavigate::SharedPtr goal_handle)
   {
-    auto goal_handle = future.get();
     if (!goal_handle) {
       RCLCPP_ERROR(this->get_logger(), "Goal was rejected by server");
+      current_goal_handle_ = nullptr;
     } else {
       RCLCPP_INFO(this->get_logger(), "Goal accepted by server, waiting for result");
+      current_goal_handle_ = goal_handle;
     }
   }
 
   void feedback_callback(
-    GoalHandleNavigateToPose::SharedPtr,
-    const std::shared_ptr<const NavigateToPose::Feedback> feedback)
+    GoalHandleNavigate::SharedPtr,
+    const std::shared_ptr<const Navigate::Feedback> feedback)
   {
-    RCLCPP_INFO(this->get_logger(), "Received feedback: %f", feedback->distance_remaining);
+    RCLCPP_INFO(this->get_logger(), "Distance remaining: %f", feedback->distance_remaining);
   }
 
-  void result_callback(const GoalHandleNavigateToPose::WrappedResult & result)
+  void result_callback(const GoalHandleNavigate::WrappedResult & result)
   {
+    current_goal_handle_ = nullptr;
     switch (result.code) {
       case rclcpp_action::ResultCode::SUCCEEDED:
-        RCLCPP_INFO(this->get_logger(), "Goal succeeded");
+        RCLCPP_INFO(this->get_logger(), "Goal succeeded!");
         break;
       case rclcpp_action::ResultCode::ABORTED:
         RCLCPP_ERROR(this->get_logger(), "Goal was aborted");
@@ -95,20 +133,14 @@ private:
         return;
     }
 
-    const auto & success = result.result->successful;
-    if (success) {
-      RCLCPP_INFO(this->get_logger(), "Result received: %d", success);
+    if (result.result->success) {
+      RCLCPP_INFO(this->get_logger(), "Navigation successfully finished.");
     } else {
-      RCLCPP_WARN(this->get_logger(), "Navigation failed");
+      RCLCPP_WARN(this->get_logger(), "Navigation failed.");
     }
   }
 };
 
-int main(int argc, char ** argv)
-{
-  rclcpp::init(argc, argv);
-  auto action_client = std::make_shared<NavActionClient>();
-  rclcpp::spin(action_client);
-  rclcpp::shutdown();
-  return 0;
-}
+} // namespace nav_action_client_lib
+
+RCLCPP_COMPONENTS_REGISTER_NODE(nav_action_client_lib::NavActionClient)

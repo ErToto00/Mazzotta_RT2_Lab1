@@ -1,5 +1,6 @@
 import launch
-from launch_ros.actions import Node, ComposableNodeContainer, LoadComposableNodes
+from launch_ros.actions import Node, ComposableNodeContainer
+from launch_ros.descriptions import ComposableNode
 
 def generate_launch_description():
     return launch.LaunchDescription([
@@ -16,20 +17,15 @@ def generate_launch_description():
             package='rclcpp_components',
             executable='component_container',
             composable_node_descriptions=[
-                LoadComposableNodes(
-                    target_container='navigation_container',
-                    composable_node_descriptions=[
-                        launch_ros.descriptions.ComposableNode(
-                            package='navigation_action_server',
-                            plugin='nav_action_server_lib::NavActionServer',
-                            name='nav_action_server'
-                        ),
-                        launch_ros.descriptions.ComposableNode(
-                            package='navigation_action_server',
-                            plugin='nav_action_client_lib::NavActionClient',
-                            name='nav_action_client'
-                        )
-                    ]
+                ComposableNode(
+                    package='navigation_action_server',
+                    plugin='nav_action_server_lib::NavActionServer',
+                    name='nav_action_server'
+                ),
+                ComposableNode(
+                    package='navigation_action_server',
+                    plugin='nav_action_client_lib::NavActionClient',
+                    name='nav_action_client'
                 )
             ]
         )
