@@ -4,29 +4,30 @@ from launch_ros.descriptions import ComposableNode
 
 def generate_launch_description():
     return launch.LaunchDescription([
-        # Avvia il simulatore turtlesim
+        # Avvia il simulatore turtlesim in un nuovo terminale
         Node(
             package='turtlesim',
             executable='turtlesim_node',
-            name='simulated_turtle'
+            name='simulated_turtle',
+            prefix='terminator -x'
         ),
-        # Crea un contenitore per i componenti
-        ComposableNodeContainer(
-            name='navigation_container',
-            namespace='',
-            package='rclcpp_components',
-            executable='component_container',
-            composable_node_descriptions=[
-                ComposableNode(
-                    package='navigation_action_server',
-                    plugin='nav_action_server_lib::NavActionServer',
-                    name='nav_action_server'
-                ),
-                ComposableNode(
-                    package='navigation_action_server',
-                    plugin='nav_action_client_lib::NavActionClient',
-                    name='nav_action_client'
-                )
-            ]
+        # Spawns a second turtle (run in the background launch terminal)
+        launch.actions.ExecuteProcess(
+            cmd=['ros2', 'service', 'call', '/spawn', 'turtlesim/srv/Spawn', "{x: 8.0, y: 8.0, theta: 0.0, name: 'turtle2'}"],
+            output='screen'
+        ),
+        # Avvia il server in un nuovo terminale
+        Node(
+            package='navigation_action_server',
+            executable='nav_action_server_node',
+            name='nav_action_server',
+            prefix='terminator -x'
+        ),
+        # Avvia il client in un nuovo terminale (per interazione CLI)
+        Node(
+            package='navigation_action_server',
+            executable='nav_action_client_node',
+            name='nav_action_client',
+            prefix='terminator -x'
         )
     ])
