@@ -15,6 +15,12 @@ using namespace std::placeholders;
 namespace nav_action_server_lib
 {
 
+/* 
+ * NavActionServer Class:
+ * Implements the Action server for navigation.
+ * Handles requests to move the turtle and publishes velocity commands (cmd_vel),
+ * continuously monitoring the current position and orientation via TF2.
+ */
 class NavActionServer : public rclcpp::Node
 {
 public:
@@ -26,11 +32,13 @@ public:
   {
     using namespace std::placeholders;
 
+    // Initializes the TF2 buffer and listener to listen for and store spatial transformations (tf)
     this->tf_buffer_ =
       std::make_unique<tf2_ros::Buffer>(this->get_clock());
     this->transform_listener_ =
       std::make_shared<tf2_ros::TransformListener>(*this->tf_buffer_);
 
+    // Creates the Action server named "navigate" providing the bindings for the necessary callback functions 
     this->action_server_ = rclcpp_action::create_server<Navigate>(
       this,
       "navigate",
@@ -38,7 +46,8 @@ public:
       std::bind(&NavActionServer::handle_cancel, this, _1),
       std::bind(&NavActionServer::handle_accepted, this, _1));
 
-    this->publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("turtle1/cmd_vel", 10);
+    // Creates the publisher to send velocity commands (cmd_vel) to the simulated robot 
+    this->publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
   }
 
 private:
@@ -47,6 +56,7 @@ private:
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> transform_listener_;
 
+  // Callback: Invoked when a client sends a new goal. Verifies whether to accept or reject it. 
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID & uuid,
     std::shared_ptr<const Navigate::Goal> goal)
@@ -56,6 +66,7 @@ private:
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
   }
 
+  // Callback: Invoked when the client requests to cancel an ongoing goal. 
   rclcpp_action::CancelResponse handle_cancel(
     const std::shared_ptr<GoalHandleNavigate> goal_handle)
   {
@@ -64,14 +75,16 @@ private:
     return rclcpp_action::CancelResponse::ACCEPT;
   }
 
+  // Callback: Invoked as soon as a goal is successfully accepted (from handle_goal). 
   void handle_accepted(const std::shared_ptr<GoalHandleNavigate> goal_handle)
   {
     using namespace std::placeholders;
 
-    // This needs to return quickly to avoid blocking the executor, so spin up a new thread
+    // Launches the actual execution in a separate thread to avoid blocking the ROS node scheduler 
     std::thread{std::bind(&NavActionServer::execute, this, _1), goal_handle}.detach();
   }
 
+  // Function executed in the new thread: implements the control loop (reads tf, calculates error, publishes velocity) 
   void execute(const std::shared_ptr<GoalHandleNavigate> goal_handle)
   {
     RCLCPP_INFO(this->get_logger(), "Executing goal");
@@ -80,56 +93,50 @@ private:
     auto feedback = std::make_shared<Navigate::Feedback>();
     auto result = std::make_shared<Navigate::Result>();
 
+    // Execution frequency of the control loop (10 Hz)
     rclcpp::Rate loop_rate(10);
+    // Tolerance thresholds to consider the goal (distance and orientation) as reached
     const double distance_tolerance = 0.25;
     const double angle_tolerance = 0.1;
 
     while (rclcpp::ok()) {
       geometry_msgs::msg::TransformStamped transformStamped;
       try {
-        // Look up the transform from the fixed frame ('odom' or 'world' or simply the parent frame for turtlesim)
-        // In turtlesim, the global frame is usually implicitly 'world' and there might not be a published tf tree by default,
-        // unless we use something like turtle_tf2_broadcaster. But assuming the user wants to lookup from 'world' to 'turtle1'.
-        // Let's use lookupTransform from 'world' to 'turtle1'. But we don't have a broadcaster here.
-        // Wait, does the prompt imply we have tf2 running? Yes, "It must use the tf2 library to monitor the robot's pose".
-        // Often in RT2, there's a broadcaster assumed or they just look up "world" to "turtle1".
+        /* Asks TF2 to retrieve the most recent known position/orientation
+         * of 'link_chassis' relative to the global 'odom' reference frame. */
         transformStamped = tf_buffer_->lookupTransform(
-          "world", // turtlesim root is usually without tf, but if there's tf, it's 'world' or 'odom'
-          "turtle1", // target frame
+          "odom",
+          "link_chassis", // target frame
           tf2::TimePointZero);
       } catch (const tf2::TransformException & ex) {
-        // If tf is not available yet, log and sleep.
-        // Note: For a pure turtlesim without tf broadcasters, this lookup will fail constantly unless we add a broadcaster.
-        // To be safe, we'll keep this logic as requested: "use tf2 library to monitor the robot's pose".
+        // If the transformation is not yet available in the tf tree, waits and runs a new loop 
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Waiting for TF: %s", ex.what());
         loop_rate.sleep();
         continue;
       }
 
-      /* 
-       * Explanation of Frame Transformation for Error Calculation:
-       * The `lookupTransform` above gets the current pose of 'turtle1' relative to the 'world' frame.
-       * `transformStamped.transform.translation` gives the current (x, y) coordinates.
-       * `transformStamped.transform.rotation` gives the current orientation as a quaternion.
-       * We compare these current global coordinates to the target (goal->x, goal->y, goal->theta)
-       * which are also assumed to be in the 'world' frame, to calculate distance and angle errors.
-       */
 
+      // Extracts the robot's current (x, y) position from the calculated transformation 
       double current_x = transformStamped.transform.translation.x;
       double current_y = transformStamped.transform.translation.y;
 
+      // Calculation of the Euclidean distance error between the turtle and the desired point 
       double distance_error = std::sqrt(std::pow(goal->x - current_x, 2) +
                                         std::pow(goal->y - current_y, 2));
 
-      // Calculate desired angle to reach the target point
+      // Calculation of the angle the turtle must assume to point towards the desired coordinates (atan2(dy, dx))
       double target_angle = std::atan2(goal->y - current_y, goal->x - current_x);
 
+      // Calculation of the angular error by measuring the difference with respect to the current orientation (yaw)
       double diff = target_angle - tf2::getYaw(transformStamped.transform.rotation);
+      // Normalizes the angle to always keep it within [-pi, pi]
       double angle_error = std::atan2(std::sin(diff), std::cos(diff));
 
       geometry_msgs::msg::Twist msg;
       if (distance_error > distance_tolerance) {
-        // Turn towards the goal if the angle error is significant, otherwise move forward
+        /* Basic proportional control to reach the desired (x, y) position:
+         * If the angular error is still significant, stops linear motion and rotates towards the point.
+         * Otherwise, advances linearly towards the point. */
         if (std::abs(angle_error) > angle_tolerance) {
           msg.linear.x = 0.0;
           msg.angular.z = 2.0 * angle_error; // Proportional angular control
@@ -138,7 +145,7 @@ private:
           msg.angular.z = 0.0;
         }
       } else {
-        // Goal position reached. Adjust to final theta if needed.
+        // Position (x, y) successfully reached. Aligns the turtle to the final theta angle. 
         double final_diff = goal->theta - tf2::getYaw(transformStamped.transform.rotation);
         double final_angle_error = std::atan2(std::sin(final_diff), std::cos(final_diff));
           
@@ -146,17 +153,21 @@ private:
           msg.linear.x = 0.0;
           msg.angular.z = 2.0 * final_angle_error;
         } else {
+          // The final orientation is also correct. Interrupt the action by publishing zero velocity. 
           msg.linear.x = 0.0;
           msg.angular.z = 0.0;
           publisher_->publish(msg);
-          break; // Succeeded
+          break; // Goal successfully completed
         }
       }
 
+      // Publishes the calculated Twist commands
       publisher_->publish(msg);
+      // Sends a feedback update to the client with the remaining distance 
       feedback->distance_remaining = distance_error;
       goal_handle->publish_feedback(feedback);
 
+      // Asynchronously checks if a cancellation request arrived from the client while in the loop
       if (goal_handle->is_canceling()) {
         result->success = false;
         goal_handle->canceled(result);
@@ -178,6 +189,6 @@ private:
   }
 };
 
-} // namespace nav_action_server_lib
+}
 
 RCLCPP_COMPONENTS_REGISTER_NODE(nav_action_server_lib::NavActionServer)

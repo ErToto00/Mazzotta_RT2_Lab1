@@ -1,10 +1,10 @@
-# Goal
+# Goal (Final coordinates and orientation the turtle must reach)
 float64 x
 float64 y
 float64 theta
 ---
-# Result
+# Result (Indicates successful completion of the action)
 bool success
 ---
-# Feedback
+# Feedback (Continuous remaining distance to reach the positional goal)
 float64 distance_remaining

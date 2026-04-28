@@ -2,3 +2,4 @@ build/
 install/
 log/
 .vscode/
+src/navigation_action_server/urdf
