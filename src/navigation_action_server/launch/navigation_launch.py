@@ -20,13 +20,21 @@ def generate_launch_description():
             launch_arguments={'world': 'my.sdf', 'use_sim_time': 'True'}.items()
         ),
         
-        # Launches the server in a new terminal
+        # Launches the server in a new terminal using component_container_mt for multi-threading
+        Node(
+            package='rclcpp_components',
+            executable='component_container_mt',
+            name='nav_action_server_container',
+            parameters=[{'use_sim_time': True}],
+            output='screen'
+        ),
         Node(
             package='navigation_action_server',
             executable='nav_action_server_node',
             name='nav_action_server',
             parameters=[{'use_sim_time': True}],
-            prefix='xterm -e'
+            remap=[('__node', 'nav_action_server')],
+            output='screen'
         ),
         
         # Bridge for robot TF and Odom

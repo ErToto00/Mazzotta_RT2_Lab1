@@ -12,6 +12,7 @@ find_package(rclcpp_action REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)  # Aggiunto per la dipendenza nav_msgs
 find_package(navigation_interfaces REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
@@ -31,6 +32,7 @@ ament_target_dependencies(nav_action_server_lib
   tf2
   tf2_ros
   geometry_msgs
+  nav_msgs  # Aggiunto per la dipendenza nav_msgs
   navigation_interfaces
   tf2_geometry_msgs
 )
