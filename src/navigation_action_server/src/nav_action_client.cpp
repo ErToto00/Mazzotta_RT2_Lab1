@@ -72,6 +72,12 @@ private:
         continue;
       }
 
+      if (input == "q" || input == "Q") {
+        RCLCPP_INFO(this->get_logger(), "Exiting...");
+        rclcpp::shutdown();
+        break;
+      }
+
       // Attempts to extract three floating point values (x, y, theta). If valid, sends the goal 
       double x, y, theta;
       if (sscanf(input.c_str(), "%lf %lf %lf", &x, &y, &theta) == 3) {

@@ -112,6 +112,10 @@ private:
       } catch (const tf2::TransformException & ex) {
         // If the transformation is not yet available in the tf tree, waits and runs a new loop 
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Waiting for TF: %s", ex.what());
+        if (ex.what() == std::string("Could not find a connection between 'base_link' and 'odom' because they are not part of the same tree.")) {
+          RCLCPP_ERROR(this->get_logger(), "Frame 'odom' does not exist.");
+          return;
+        }
         loop_rate.sleep();
         continue;
       }
