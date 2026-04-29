@@ -13,6 +13,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(navigation_interfaces REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 
 
 add_library(nav_action_server_lib SHARED
@@ -31,6 +32,7 @@ ament_target_dependencies(nav_action_server_lib
   tf2_ros
   geometry_msgs
   navigation_interfaces
+  tf2_geometry_msgs
 )
 rclcpp_components_register_node(nav_action_server_lib PLUGIN "nav_action_server_lib::NavActionServer" EXECUTABLE nav_action_server_node)
 
@@ -61,7 +63,6 @@ install(TARGETS
 
 install(DIRECTORY
   launch
-  urdf
   DESTINATION share/${PROJECT_NAME}
 )
 

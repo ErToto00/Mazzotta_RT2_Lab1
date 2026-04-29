@@ -1,6 +1,6 @@
 import os
-import launch
 from ament_index_python.packages import get_package_share_directory
+import launch
 from launch_ros.actions import Node
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -8,66 +8,16 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 def generate_launch_description():
     """
     Builds and returns the launch configuration (LaunchDescription).
-    Defines the nodes and processes that make up the application, launching
-    each program in a dedicated terminal (via 'terminator -x').
+    Defines the nodes and processes that make up the application.
     """
     
-    # Path to the local URDF file
-    pkg_share_dir = get_package_share_directory('navigation_action_server')
-    urdf_file_path = os.path.join(pkg_share_dir, 'urdf', 'my_robot.urdf')
-    
-    # Read the URDF file
-    with open(urdf_file_path, 'r') as infp:
-        robot_desc = infp.read()
-        
-    ros_gz_sim_dir = get_package_share_directory('ros_gz_sim')
+    pkg_bme_gazebo_sensors = get_package_share_directory('bme_gazebo_sensors')
 
     return launch.LaunchDescription([
-        # Launches the Gazebo Sim simulator with an empty world
+        # Launches the Gazebo environment, robot, bridge, and RViz from bme_gazebo_sensors
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(os.path.join(ros_gz_sim_dir, 'launch', 'gz_sim.launch.py')),
-            launch_arguments={'gz_args': 'empty.sdf -r'}.items()
-        ),
-        
-        # Publishes the state (TFs) of the robot using the URDF
-        Node(
-            package='robot_state_publisher',
-            executable='robot_state_publisher',
-            name='robot_state_publisher',
-            output='screen',
-            parameters=[{'robot_description': robot_desc, 'use_sim_time': True}]
-        ),
-        
-        # Spawns the URDF entity inside Gazebo Sim
-        Node(
-            package='ros_gz_sim',
-            executable='create',
-            name='spawn_entity',
-            arguments=['-name', 'my_robot', '-string', robot_desc, '-z', '0.05'],
-            output='screen'
-        ),
-        
-        # Bridge ROS 2 and Gazebo Transport topics
-        Node(
-            package='ros_gz_bridge',
-            executable='parameter_bridge',
-            parameters=[{'use_sim_time': True}],
-            arguments=[
-                '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
-                '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
-                '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
-                '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V'
-            ],
-            output='screen'
-        ),
-        
-        # Launches RViz2 in a new terminal
-        Node(
-            package='rviz2',
-            executable='rviz2',
-            name='rviz2',
-            output='screen',
-            prefix='terminator -x'
+            PythonLaunchDescriptionSource(os.path.join(pkg_bme_gazebo_sensors, 'launch', 'spawn_robot.launch.py')),
+            launch_arguments={'world': 'my.sdf', 'use_sim_time': 'True'}.items()
         ),
         
         # Launches the server in a new terminal
@@ -76,7 +26,23 @@ def generate_launch_description():
             executable='nav_action_server_node',
             name='nav_action_server',
             parameters=[{'use_sim_time': True}],
-            prefix='terminator -x'
+            prefix='xterm -e'
+        ),
+        
+        # Bridge for robot TF and Odom
+        Node(
+            package='ros_gz_bridge',
+            executable='parameter_bridge',
+            parameters=[{'use_sim_time': True}],
+            arguments=[
+                '/model/mogi_bot/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
+                '/model/mogi_bot/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry'
+            ],
+            remappings=[
+                ('/model/mogi_bot/tf', '/tf'),
+                ('/model/mogi_bot/odom', '/odom')
+            ],
+            output='screen'
         ),
         
         # Launches the client in a new terminal (for CLI interaction)
@@ -85,6 +51,6 @@ def generate_launch_description():
             executable='nav_action_client_node',
             name='nav_action_client',
             parameters=[{'use_sim_time': True}],
-            prefix='terminator -x'
+            prefix='xterm -e'
         )
     ])
