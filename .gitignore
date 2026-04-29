@@ -1,5 +1,7 @@
 build/
 install/
 log/
-.vscode/
-src/navigation_action_server/urdf
+bme_gazebo_sensors-main
+.aider*
+bash.txt
+.vscode

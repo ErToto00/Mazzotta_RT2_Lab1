@@ -52,7 +52,7 @@ private:
   {
     while (rclcpp::ok()) {
       std::cout << "\n--- Navigation CLI ---\n";
-      std::cout << "Enter 'x y theta' to send a new target, or 'cancel' to cancel current goal: ";
+      std::cout << "Enter 'x y theta' to send a new target, 'c' to cancel current goal, or 'q' to quit: ";
       
       std::string input;
       // Reads the user's input
