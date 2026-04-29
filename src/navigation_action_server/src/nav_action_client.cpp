@@ -30,14 +30,13 @@ public:
       this,
       "navigate");
 
-    /* Starts a separate thread for CLI interaction, so as not to block the ROS node's spinner */
+    /* Starts a separate thread for CLI interaction */
     cli_thread_ = std::thread(&NavActionClient::cli_loop, this);
   }
 
   ~NavActionClient()
   {
     if (cli_thread_.joinable()) {
-      // Forcing standard input close isn't trivial here, but we can detach
       cli_thread_.detach();
     }
   }
@@ -52,10 +51,9 @@ private:
   {
     while (rclcpp::ok()) {
       std::cout << "\n--- Navigation CLI ---\n";
-      std::cout << "Enter 'x y theta' to send a new target, 'c' to cancel current goal, or 'q' to quit: ";
+      std::cout << "Enter 'g' to send a new goal, 'c' to cancel current goal, or 'q' to quit:\n";
       
       std::string input;
-      // Reads the user's input
       if (!std::getline(std::cin, input)) {
         continue;
       }
@@ -72,26 +70,33 @@ private:
         continue;
       }
 
+      // Exit logic
       if (input == "q" || input == "Q") {
         RCLCPP_INFO(this->get_logger(), "Exiting...");
         rclcpp::shutdown();
         break;
       }
 
-      // Attempts to extract three floating point values (x, y, theta). If valid, sends the goal 
-      double x, y, theta;
-      if (sscanf(input.c_str(), "%lf %lf %lf", &x, &y, &theta) == 3) {
-        send_goal(x, y, theta);
-      } else {
-        std::cout << "Invalid input. Please provide three numbers separated by spaces (e.g., '5.0 5.0 0.0').\n";
+      // Corrected goal input logic: Wait for a second input for coordinates
+      if (input == "g" || input == "G"){
+        std::cout << "Enter <x y theta> (e.g., 5.0 2.5 0.0):\n";
+        
+        std::string coord_input;
+        if (std::getline(std::cin, coord_input)) {
+          double x, y, theta;
+          if (sscanf(coord_input.c_str(), "%lf %lf %lf", &x, &y, &theta) == 3) {
+            send_goal(x, y, theta);
+          } else {
+            std::cout << "Invalid input format. Expected three numbers.\n";
+          }
+        }
       }
     }
   }
 
-  // Sends the goal request to the server 
+  // Sends the goal request to the server
   void send_goal(double x, double y, double theta)
   {
-    // Waits up to 5 seconds for the "navigate" Action server to become available 
     if (!this->client_ptr_->wait_for_action_server(std::chrono::seconds(5))) {
       RCLCPP_ERROR(this->get_logger(), "Action server not available after waiting");
       return;
@@ -104,7 +109,6 @@ private:
 
     RCLCPP_INFO(this->get_logger(), "Sending goal: x=%f, y=%f, theta=%f", x, y, theta);
 
-    // Configures the callback functions to receive updates and the asynchronous response from the server 
     auto send_goal_options = rclcpp_action::Client<Navigate>::SendGoalOptions();
     send_goal_options.goal_response_callback =
       std::bind(&NavActionClient::goal_response_callback, this, _1);
@@ -113,11 +117,10 @@ private:
     send_goal_options.result_callback =
       std::bind(&NavActionClient::result_callback, this, _1);
 
-    // Actually sends the goal along with the configured callbacks 
-    auto future_goal_handle = this->client_ptr_->async_send_goal(goal_msg, send_goal_options);
+    this->client_ptr_->async_send_goal(goal_msg, send_goal_options);
   }
 
-  // Callback: Handles the server's initial response (acceptance or rejection) 
+  // Callback: Handles initial response
   void goal_response_callback(GoalHandleNavigate::SharedPtr goal_handle)
   {
     if (!goal_handle) {
@@ -129,7 +132,7 @@ private:
     }
   }
 
-  // Callback: Receives continuous feedback from the server during execution (remaining distance) 
+  // Callback: Receives continuous feedback
   void feedback_callback(
     GoalHandleNavigate::SharedPtr,
     const std::shared_ptr<const Navigate::Feedback> feedback)
