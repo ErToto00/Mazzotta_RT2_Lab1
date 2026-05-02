@@ -5,6 +5,7 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "navigation_interfaces/action/navigate.hpp"
+#include "std_msgs/msg/empty.hpp"
 
 using namespace std::placeholders;
 
@@ -30,6 +31,8 @@ public:
       this,
       "navigate");
 
+    this->shutdown_pub_ = this->create_publisher<std_msgs::msg::Empty>("/shutdown", 10);
+
     /* Starts a separate thread for CLI interaction */
     cli_thread_ = std::thread(&NavActionClient::cli_loop, this);
   }
@@ -43,6 +46,7 @@ public:
 
 private:
   rclcpp_action::Client<Navigate>::SharedPtr client_ptr_;
+  rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr shutdown_pub_;
   std::thread cli_thread_;
   std::shared_ptr<GoalHandleNavigate> current_goal_handle_;
 
@@ -72,12 +76,20 @@ private:
 
       // Exit logic
       if (input == "q" || input == "Q") {
+        if (current_goal_handle_) {
+          RCLCPP_INFO(this->get_logger(), "Canceling goal before exiting...");
+          client_ptr_->async_cancel_goal(current_goal_handle_);
+          std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        RCLCPP_INFO(this->get_logger(), "Sending shutdown signal to server...");
+        shutdown_pub_->publish(std_msgs::msg::Empty());
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
         RCLCPP_INFO(this->get_logger(), "Exiting...");
         rclcpp::shutdown();
         break;
       }
 
-      // Corrected goal input logic: Wait for a second input for coordinates
       if (input == "g" || input == "G"){
         std::cout << "Enter <x y theta> (e.g., 5.0 2.5 0.0):\n";
         
@@ -112,8 +124,6 @@ private:
     auto send_goal_options = rclcpp_action::Client<Navigate>::SendGoalOptions();
     send_goal_options.goal_response_callback =
       std::bind(&NavActionClient::goal_response_callback, this, _1);
-    send_goal_options.feedback_callback =
-      std::bind(&NavActionClient::feedback_callback, this, _1, _2);
     send_goal_options.result_callback =
       std::bind(&NavActionClient::result_callback, this, _1);
 
@@ -130,14 +140,6 @@ private:
       RCLCPP_INFO(this->get_logger(), "Goal accepted by server, waiting for result");
       current_goal_handle_ = goal_handle;
     }
-  }
-
-  // Callback: Receives continuous feedback
-  void feedback_callback(
-    GoalHandleNavigate::SharedPtr,
-    const std::shared_ptr<const Navigate::Feedback> feedback)
-  {
-    RCLCPP_INFO(this->get_logger(), "Distance remaining: %f", feedback->distance_remaining);
   }
 
   // Callback: Executed upon goal completion

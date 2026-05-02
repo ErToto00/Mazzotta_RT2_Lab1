@@ -7,8 +7,12 @@
 #include "rclcpp_components/register_node_macro.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "navigation_interfaces/action/navigate.hpp"
-#include "nav_msgs/msg/odometry.hpp" // NEW: For direct odometry
+#include "nav_msgs/msg/odometry.hpp" // For direct odometry
+#include "tf2_ros/buffer.h"
+#include "tf2_ros/transform_listener.h"
 #include "tf2/utils.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "std_msgs/msg/empty.hpp"
 
 using namespace std::placeholders;
 
@@ -24,7 +28,10 @@ public:
   explicit NavActionServer(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
     : Node("nav_action_server", options)
   {
-    // Subscribe directly to /odom to get position, bypassing TF entirely
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
+    // Subscribe directly to /odom as a fallback if TF fails
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
       "/odom", 10, std::bind(&NavActionServer::odom_callback, this, _1));
 
@@ -35,12 +42,22 @@ public:
       std::bind(&NavActionServer::handle_accepted, this, _1));
 
     this->publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
+
+    //Subscribe to /shutdown topic to exit gracefully
+    this->shutdown_sub_ = this->create_subscription<std_msgs::msg::Empty>(
+      "/shutdown", 10, [this](const std_msgs::msg::Empty::SharedPtr) {
+        RCLCPP_INFO(this->get_logger(), "Shutdown signal received. Exiting...");
+        rclcpp::shutdown();
+      });
   }
 
 private:
   rclcpp_action::Server<Navigate>::SharedPtr action_server_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_;
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr shutdown_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   
   // Variables to store current position
   double current_x_ = 0.0;
@@ -49,7 +66,7 @@ private:
   bool odom_received_ = false;
   std::mutex odom_mutex_; // Protects the variables between threads
 
-  // NEW: Callback that updates position every time Gazebo sends an /odom message
+  //Callback that updates position every time Gazebo sends an /odom message
   void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
     std::lock_guard<std::mutex> lock(odom_mutex_);
@@ -87,13 +104,41 @@ private:
     rclcpp::Rate loop_rate(10);
 
     while (rclcpp::ok()) {
-      double cx, cy, cyaw;
+      if (goal_handle->is_canceling()) {
+        result->success = false;
+        goal_handle->canceled(result);
+        RCLCPP_INFO(this->get_logger(), "Goal canceled. Stopping robot.");
+        geometry_msgs::msg::Twist stop_msg;
+        stop_msg.linear.x = 0.0;
+        stop_msg.angular.z = 0.0;
+        publisher_->publish(stop_msg);
+        return;
+      }
 
-      // Safely grab the latest position from our Odometry callback
-      {
+      double cx = 0.0;
+      double cy = 0.0;
+      double cyaw = 0.0;
+      bool position_found = false;
+
+      // 1. Try to use tf2 (Academic Requirement)
+      try {
+        geometry_msgs::msg::TransformStamped t = tf_buffer_->lookupTransform(
+          "odom", "base_footprint", tf2::TimePointZero);
+        cx = t.transform.translation.x;
+        cy = t.transform.translation.y;
+        cyaw = tf2::getYaw(t.transform.rotation);
+        position_found = true;
+      } catch (const tf2::TransformException & ex) {
+        RCLCPP_DEBUG_THROTTLE(
+          this->get_logger(), *this->get_clock(), 2000,
+          "TF2 lookup failed: %s. Falling back to /odom topic.", ex.what());
+      }
+
+      // 2. Fallback to direct Odometry subscription if TF2 fails
+      if (!position_found) {
         std::lock_guard<std::mutex> lock(odom_mutex_);
         if (!odom_received_) {
-          RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Waiting for /odom messages...");
+          RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "Waiting for TF or /odom messages...");
           loop_rate.sleep();
           continue;
         }
@@ -125,6 +170,7 @@ private:
 
       publisher_->publish(msg);
       feedback->distance_remaining = dist_err;
+      RCLCPP_INFO(this->get_logger(), "Distance remaining: %f", dist_err);
       goal_handle->publish_feedback(feedback);
       loop_rate.sleep();
     }
